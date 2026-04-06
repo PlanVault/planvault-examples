@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 108
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "mcp/python-sqlite",
+  "webhooks/kafka-trigger/python-confluent",
+]
+testpaths = [
+  "mcp/python-sqlite/tests",
+  "webhooks/kafka-trigger/python-confluent/tests",
+]

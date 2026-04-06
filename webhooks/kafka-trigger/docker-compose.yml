@@ -1,0 +1,42 @@
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.11
+    container_name: planvault-examples-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr
+      - internal://redpanda:9092,external://127.0.0.1:19092
+    ports:
+      - "19092:19092"
+
+  init-topics:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.11
+    depends_on:
+      - redpanda
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        for i in $$(seq 1 40); do
+          rpk topic list --brokers redpanda:9092 >/dev/null 2>&1 && break
+          sleep 1
+        done
+        rpk topic create planvault.triggers planvault.triggers.dlq \
+          --brokers redpanda:9092 \
+          --topic-config retention.ms:604800000 2>/dev/null || true
+
+networks:
+  default:
+    name: planvault-examples-kafka

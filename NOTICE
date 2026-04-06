@@ -1,0 +1,10 @@
+PlanVault Examples
+==================
+
+This directory (`planvault-examples/`) is licensed under the Apache License 2.0.
+See the LICENSE file in this directory.
+
+It may be copied into a separate open-source repository; the rest of the PlanVault
+monorepo may be governed by different terms.
+
+Third-party dependencies (npm, Maven, sbt, PyPI) retain their respective licenses.

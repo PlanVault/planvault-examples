@@ -1,0 +1,80 @@
+{
+  "name": "PlanVault inbound trigger demo",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d4e5f6a7-b8c9-0123-def0-1234567890ab",
+      "name": "ManualTrigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst secret = 'YOUR_WEBHOOK_SECRET';\nconst host = 'https://api.planvault.ai';\nconst orgId = 'YOUR_ORG_ID';\nconst triggerKey = 'YOUR_TRIGGER_KEY';\n\nconst payload = {\n  message: 'Session from n8n manual run',\n  externalUserId: 'n8n-inbound-user',\n};\n\nconst body = JSON.stringify(payload);\nconst sig = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex');\nconst base = host.endsWith('/') ? host.slice(0, -1) : host;\nconst url = `${base}/api/v1/orgs/${orgId}/webhooks/${triggerKey}`;\n\nreturn [{ json: { body, sig, url } }];"
+      },
+      "id": "e5f6a7b8-c9d0-1234-ef01-234567890abc",
+      "name": "SignPayload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Signature",
+              "value": "={{ $json.sig }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "f6a7b8c9-d0e1-2345-f012-34567890abcd",
+      "name": "PostInboundWebhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0]
+    }
+  ],
+  "connections": {
+    "ManualTrigger": {
+      "main": [
+        [
+          {
+            "node": "SignPayload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SignPayload": {
+      "main": [
+        [
+          {
+            "node": "PostInboundWebhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {}
+}
