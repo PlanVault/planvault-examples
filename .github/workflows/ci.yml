@@ -32,6 +32,7 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: sbt
+      - uses: sbt/setup-sbt@v1
       - run: sbt test
         working-directory: webhooks/kafka-trigger/scala-fs2
 
@@ -55,8 +56,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pytest
-      - uses: astral-sh/setup-ruff@v3
-      - run: ruff check webhooks/kafka-trigger/python-confluent mcp/python-sqlite webhooks/kafka-trigger/python-confluent/tests mcp/python-sqlite/tests
+      - uses: astral-sh/ruff-action@v3
+        with:
+          src: >-
+            webhooks/kafka-trigger/python-confluent
+            mcp/python-sqlite
+            webhooks/kafka-trigger/python-confluent/tests
+            mcp/python-sqlite/tests
       - run: pytest
 
   shellcheck:
