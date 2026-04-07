@@ -83,7 +83,11 @@ def main() -> None:
                     print("[warn] HTTP 429 rate limited; not committing offset for retry", flush=True)
                     commit = False
                 elif r.status_code >= 500:
-                    print(f"[warn] HTTP {r.status_code} server error; not committing offset for retry", flush=True)
+                    print(
+                        f"[warn] HTTP {r.status_code} server error; "
+                        "not committing offset for retry",
+                        flush=True,
+                    )
                     commit = False
                 elif not r.ok:
                     print(f"[warn] HTTP {r.status_code} -> DLQ", flush=True)
