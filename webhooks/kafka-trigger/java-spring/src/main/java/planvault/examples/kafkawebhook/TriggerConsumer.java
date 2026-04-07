@@ -42,6 +42,7 @@ public class TriggerConsumer {
 
   @KafkaListener(topics = "planvault.triggers", containerFactory = "kafkaListenerContainerFactory")
   public void consume(String payload, Acknowledgment ack) {
+    boolean acknowledge = true;
     try {
       String sig = WebhookSignature.hmacSha256Hex(secret, payload);
       String uri = baseUrl + "/api/v1/orgs/" + orgId + "/webhooks/" + triggerKey;
@@ -55,10 +56,20 @@ public class TriggerConsumer {
           .toBodilessEntity()
           .block();
     } catch (WebClientResponseException ex) {
-      if (ex.getStatusCode() == HttpStatus.FORBIDDEN) {
+      var status = ex.getStatusCode();
+      if (status == HttpStatus.BAD_REQUEST
+          || status == HttpStatus.FORBIDDEN
+          || status == HttpStatus.NOT_FOUND) {
+        kafkaTemplate.send(TOPIC_DLQ, payload).join();
+      } else if (status == HttpStatus.TOO_MANY_REQUESTS || status.is5xxServerError()) {
+        acknowledge = false;
+      } else {
         kafkaTemplate.send(TOPIC_DLQ, payload).join();
       }
-    } finally {
+    } catch (RuntimeException ex) {
+      acknowledge = false;
+    }
+    if (acknowledge) {
       ack.acknowledge();
     }
   }

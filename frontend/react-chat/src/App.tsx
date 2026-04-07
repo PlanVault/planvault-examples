@@ -8,6 +8,22 @@ import { consumeSseBuffer } from './sseParse'
 
 type ToolStep = { name: string; status: 'running' | 'done' | 'error' }
 
+/** Prefer RFC 7807 `detail` / `title` when the API returns `application/problem+json`. */
+async function formatHttpError(res: Response): Promise<string> {
+  const raw = await res.text()
+  const ct = res.headers.get('content-type') ?? ''
+  if (ct.includes('json') && raw) {
+    try {
+      const j = JSON.parse(raw) as { title?: string; detail?: string }
+      const msg = j.detail?.trim() || j.title?.trim()
+      if (msg) return msg
+    } catch {
+      /* use raw */
+    }
+  }
+  return raw.trim() || `HTTP ${res.status}`
+}
+
 export default function App() {
   const [apiBase, setApiBase] = useState(
     () => import.meta.env.VITE_PLANVAULT_BASE_URL?.trim() || 'https://api.planvault.ai',
@@ -71,8 +87,7 @@ export default function App() {
       }),
     })
     if (!res.ok) {
-      const t = await res.text()
-      setSessionError(t || `HTTP ${res.status}`)
+      setSessionError(await formatHttpError(res))
       return
     }
     const data = (await res.json()) as { id: string }
@@ -93,8 +108,7 @@ export default function App() {
       body: JSON.stringify({ message, autoExecute: true }),
     })
     if (!res.ok) {
-      const t = await res.text()
-      setSendError(t || `HTTP ${res.status}`)
+      setSendError(await formatHttpError(res))
     }
   }
 
@@ -109,8 +123,7 @@ export default function App() {
         body: JSON.stringify({ action }),
       })
       if (!res.ok) {
-        const t = await res.text()
-        setStreamError(t || `actions HTTP ${res.status}`)
+        setStreamError(await formatHttpError(res))
         return
       }
       setConfirmPayload(null)

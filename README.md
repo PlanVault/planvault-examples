@@ -18,6 +18,7 @@ Copy [`.env.example`](.env.example) to `.env` and fill values. **`PLANVAULT_BASE
 - **Planner output:** org/project settings may set **`plannerMode`** (`auto`, `structured_json`, `python_dsl`). The Runtime SSE **`started`** / **`slots_required`** payloads include a display **`planGraph`** (`{ "nodes": [...] }` with `kind`: `assignment`, `call`, `if`, `for`, `reply`, `fail`). Clients can ignore unknown fields.
 - **SSE:** besides tool and confirmation events, the server may emit **`run_phase`** (`selecting_tools`, `planner_llm`, …) and **`replan`**. History from `GET .../history` mirrors persisted `eventType` values.
 - **HTTP errors** from the API use **RFC 7807** `application/problem+json` (e.g. admin/planner may return `type`: `urn:planvault:problem:MODEL_UNSUPPORTED_FEATURE` when structured JSON is forced but the model does not support it).
+- **Public inbound webhooks** (`POST /api/v1/orgs/.../webhooks/...`): many rejections (bad HMAC, wrong trigger, disabled trigger) return **HTTP 404** with a generic problem body — do not assume **403**. See [`docs/api-reference.md`](../docs/api-reference.md) when this tree lives next to the main repo, or the published API docs.
 
 ## License
 
