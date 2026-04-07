@@ -65,6 +65,7 @@ def main() -> None:
 
             body, _ok_json = kafka_value_to_signed_body(raw_bytes)
             sig = hmac_sha256_hex(secret, body)
+            commit = True
             try:
                 r = requests.post(
                     url,
@@ -75,12 +76,28 @@ def main() -> None:
                     },
                     timeout=60,
                 )
-                if r.status_code == 403:
+                if r.status_code in (400, 403, 404):
+                    producer.produce(TOPIC_DLQ, body.encode("utf-8"))
+                    producer.flush(10)
+                elif r.status_code == 429:
+                    print("[warn] HTTP 429 rate limited; not committing offset for retry", flush=True)
+                    commit = False
+                elif r.status_code >= 500:
+                    print(
+                        f"[warn] HTTP {r.status_code} server error; "
+                        "not committing offset for retry",
+                        flush=True,
+                    )
+                    commit = False
+                elif not r.ok:
+                    print(f"[warn] HTTP {r.status_code} -> DLQ", flush=True)
                     producer.produce(TOPIC_DLQ, body.encode("utf-8"))
                     producer.flush(10)
             except requests.RequestException as e:
-                print(f"[warn] HTTP error: {e}", flush=True)
-            consumer.commit(msg, asynchronous=False)
+                print(f"[warn] request failed: {e}; not committing offset for retry", flush=True)
+                commit = False
+            if commit:
+                consumer.commit(msg, asynchronous=False)
     finally:
         consumer.close()
 

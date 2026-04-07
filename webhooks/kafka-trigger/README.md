@@ -42,9 +42,14 @@ The Kafka **value** must be valid JSON (UTF-8). Example:
 
 Fields are forwarded into the trigger template as `body.*` (see PlanVault docs).
 
-## DLQ
+## DLQ and retries
 
-On HTTP **403** (bad signature / auth), the message is published to `planvault.triggers.dlq` and the consumer commits the offset.
+PlanVault returns **RFC 7807** `application/problem+json` on errors. For inbound webhooks, bad HMAC, unknown org/trigger, or disabled triggers typically map to **HTTP 404** (generic “not found”), not **403**.
+
+Workers in this folder:
+
+- Send **400 / 403 / 404** payloads to **`planvault.triggers.dlq`** and **commit** the offset (non-retryable client errors).
+- On **429** or **5xx** (or transport failure), **do not commit** so Kafka can redeliver after backoff.
 
 ## Run a worker
 

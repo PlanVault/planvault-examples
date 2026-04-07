@@ -9,7 +9,9 @@ import sttp.model.Uri
 
 /** Consumes `planvault.triggers`, POSTs JSON to PlanVault inbound webhook with `X-Signature`.
   *
-  * On HTTP 403 (bad HMAC), forwards the payload to `planvault.triggers.dlq` and commits the offset.
+  * On HTTP 400 / 403 / 404 (bad body, legacy forbidden, or PlanVault’s unified “not found” for bad HMAC / unknown trigger),
+  * forwards the payload to `planvault.triggers.dlq` and commits the offset.
+  * On HTTP 429 or 5xx (or transport failure), does **not** commit so the message can be redelivered.
   */
 object Main extends IOApp {
 
@@ -51,17 +53,24 @@ object Main extends IOApp {
                   .body(raw)
 
                 backend.send(req).attempt.flatMap {
-                  case Right(res) if res.code.code == 403 =>
+                  case Right(res) if res.isSuccess =>
+                    comm.offset.commit
+                  case Right(res) if Set(400, 403, 404)(res.code.code) =>
                     val key = Option(comm.record.key).getOrElse("")
                     val pr  = ProducerRecords.one(ProducerRecord(TopicDlq, key, raw))
                     producer.produce(pr) *> comm.offset.commit
-                  case Right(res) if res.isSuccess =>
-                    comm.offset.commit
+                  case Right(res) if res.code.code == 429 =>
+                    IO.println(s"[warn] HTTP 429 rate limited; offset not committed for retry: ${comm.offset}")
+                  case Right(res) if res.code.isServerError =>
+                    IO.println(s"[warn] HTTP ${res.code} server error; offset not committed: ${comm.offset}")
                   case Right(res) =>
-                    IO.println(s"[warn] HTTP ${res.code} offset=${comm.offset}") *>
+                    val key = Option(comm.record.key).getOrElse("")
+                    val pr  = ProducerRecords.one(ProducerRecord(TopicDlq, key, raw))
+                    IO.println(s"[warn] HTTP ${res.code} -> DLQ offset=${comm.offset}") *>
+                      producer.produce(pr) *>
                       comm.offset.commit
                   case Left(err) =>
-                    IO.println(s"[error] request failed: $err") *> comm.offset.commit
+                    IO.println(s"[error] request failed (offset not committed): $err")
                 }
               }
           }
