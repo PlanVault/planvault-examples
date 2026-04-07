@@ -4,6 +4,7 @@
  * show tool timeline and plan-approval modal when `confirm_plan_required` arrives.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { formatSseDetailText } from './formatSseText'
 import { consumeSseBuffer } from './sseParse'
 
 type ToolStep = { name: string; status: 'running' | 'done' | 'error' }
@@ -183,7 +184,7 @@ export default function App() {
               const phase = payload.phase
               const detail = payload.detail
               if (typeof phase === 'string') {
-                const d = detail === null || detail === undefined ? '' : String(detail)
+                const d = formatSseDetailText(detail)
                 setLastRunPhase(d.trim() ? `${phase}: ${d}` : phase)
               }
             }
