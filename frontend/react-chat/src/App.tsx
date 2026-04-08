@@ -49,6 +49,8 @@ export default function App() {
   )
   const [apiKey, setApiKey] = useState(() => import.meta.env.VITE_PLANVAULT_API_KEY?.trim() || '')
   const [externalUserId, setExternalUserId] = useState('demo-user')
+  /** Comma-separated session tags (optional); sent as string[] — case-sensitive on the server. */
+  const [tagsText, setTagsText] = useState('react-chat-example')
   const [contextVarsText, setContextVarsText] = useState('{}')
   const [contextError, setContextError] = useState<string | null>(null)
 
@@ -94,22 +96,23 @@ export default function App() {
       setContextError(e instanceof Error ? e.message : 'Invalid JSON')
       return
     }
-    if (!externalUserId.trim()) {
-      setSessionError('externalUserId is required')
-      return
-    }
     if (!apiKey.trim()) {
       setSessionError('API key is required')
       return
     }
+    const tags = tagsText
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+    const body: Record<string, unknown> = { contextVars: ctx }
+    const ext = externalUserId.trim()
+    if (ext) body.externalUserId = ext
+    if (tags.length) body.tags = tags
     const root = apiBase.replace(/\/$/, '')
     const res = await fetch(`${root}/api/v1/sessions`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({
-        externalUserId: externalUserId.trim(),
-        contextVars: ctx,
-      }),
+      body: JSON.stringify(body),
     })
     if (!res.ok) {
       setSessionError(await formatHttpError(res))
@@ -360,12 +363,23 @@ export default function App() {
       <div className="card">
         <h2>Create session</h2>
         <div className="field">
-          <label htmlFor="ext">externalUserId</label>
+          <label htmlFor="ext">externalUserId (optional)</label>
           <input
             id="ext"
             name="ext"
             value={externalUserId}
             onChange={(e) => setExternalUserId(e.target.value)}
+            placeholder="omit for anonymous session"
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="tags">tags (optional, comma-separated)</label>
+          <input
+            id="tags"
+            name="tags"
+            value={tagsText}
+            onChange={(e) => setTagsText(e.target.value)}
+            placeholder="e.g. demo, eu"
           />
         </div>
         <div className="field">
