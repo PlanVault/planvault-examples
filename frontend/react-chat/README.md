@@ -17,6 +17,8 @@ Set **API base URL** and **project API key** in the UI (or via `VITE_PLANVAULT_*
 
 The sample handles **`confirm_plan_required`** (approve/reject), **`slots_required`** (submit **`fill_slots`** via `POST .../actions`), and shows optional **`slots_plan_summary`** from SSE when the server sends it.
 
+After **`POST .../messages`**, the UI shows **`messageId`** from the JSON body and polls **`GET .../messages/{messageId}/status`** every 2s until `completed` or `failed` (in addition to the existing SSE stream for tool/plan events).
+
 ## Test
 
 ```bash
