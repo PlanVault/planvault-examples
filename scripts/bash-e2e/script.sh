@@ -14,7 +14,7 @@ hdr_auth=(-H "Authorization: Bearer ${PLANVAULT_API_KEY}" -H "Content-Type: appl
 
 echo "== POST /api/v1/sessions"
 sess_json="$(curl -fsS "${hdr_auth[@]}" -X POST "$BASE/api/v1/sessions" \
-  -d '{"externalUserId":"bash-e2e-demo","contextVars":{}}')"
+  -d '{"externalUserId":"bash-e2e-demo","contextVars":{},"tags":["bash-e2e","examples"]}')"
 sid="$(echo "$sess_json" | jq -r '.id')"
 echo "session=$sid"
 
