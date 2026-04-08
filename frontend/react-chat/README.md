@@ -13,6 +13,8 @@ npm run dev
 
 Set **API base URL** and **project API key** in the UI (or via `VITE_PLANVAULT_*` in `.env`).
 
+The sample handles **`confirm_plan_required`** (approve/reject), **`slots_required`** (submit **`fill_slots`** via `POST .../actions`), and shows optional **`slots_plan_summary`** from SSE when the server sends it.
+
 ## Test
 
 ```bash
