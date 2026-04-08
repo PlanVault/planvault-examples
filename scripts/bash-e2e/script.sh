@@ -23,8 +23,14 @@ curl -fsS "${hdr_auth[@]}" -X PUT "$BASE/api/v1/sessions/$sid/secrets" \
   -d '{"secrets":{"USER_TOKEN":"test-token-from-bash"}}' -o /dev/null
 
 echo "== POST /api/v1/sessions/$sid/messages"
-curl -fsS "${hdr_auth[@]}" -X POST "$BASE/api/v1/sessions/$sid/messages" \
-  -d '{"message":"Say hello in one short sentence.","autoExecute":true}' -o /dev/null
+msg_json="$(curl -fsS "${hdr_auth[@]}" -X POST "$BASE/api/v1/sessions/$sid/messages" \
+  -d '{"message":"Say hello in one short sentence.","autoExecute":true}')"
+mid="$(echo "$msg_json" | jq -r '.messageId // empty')"
+echo "messageId=$mid"
+if [[ -n "$mid" ]]; then
+  echo "== GET /api/v1/sessions/$sid/messages/$mid/status (once; pipeline continues async)"
+  curl -fsS "${hdr_auth[@]}" "$BASE/api/v1/sessions/$sid/messages/$mid/status" | jq .
+fi
 
 echo "== Poll history for confirm_plan_required / done / error"
 deadline=$((SECONDS + 120))
