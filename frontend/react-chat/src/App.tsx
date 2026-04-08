@@ -1,13 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
  * Minimal Runtime UI: create session, send prompts, subscribe to SSE (fetch + stream),
- * show tool timeline and plan-approval modal when `confirm_plan_required` arrives.
+ * show tool timeline, optional slot form (`slots_required` + `fill_slots`), and plan-approval modal when `confirm_plan_required` arrives.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { formatSseDetailText } from './formatSseText'
 import { consumeSseBuffer } from './sseParse'
 
 type ToolStep = { name: string; status: 'running' | 'done' | 'error' }
+
+type UiSlotField = { variable: string; prompt: string; options: string[] }
+
+function parseSlotsPayload(raw: unknown): UiSlotField[] | null {
+  if (!Array.isArray(raw)) return null
+  const out: UiSlotField[] = []
+  for (const x of raw) {
+    if (x && typeof x === 'object' && !Array.isArray(x)) {
+      const o = x as Record<string, unknown>
+      const variable = typeof o.variable === 'string' ? o.variable : ''
+      if (!variable) continue
+      const prompt = typeof o.prompt === 'string' ? o.prompt : variable
+      const options = Array.isArray(o.options) ? o.options.filter((t): t is string => typeof t === 'string') : []
+      out.push({ variable, prompt, options })
+    }
+  }
+  return out.length ? out : null
+}
 
 /** Prefer RFC 7807 `detail` / `title` when the API returns `application/problem+json`. */
 async function formatHttpError(res: Response): Promise<string> {
@@ -51,6 +69,12 @@ export default function App() {
     toolDescriptions: Record<string, string>
   } | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
+
+  const [pendingSlots, setPendingSlots] = useState<UiSlotField[] | null>(null)
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({})
+  const [slotsPlanSummary, setSlotsPlanSummary] = useState<string | null>(null)
+  const [slotsBusy, setSlotsBusy] = useState(false)
+  const [slotsError, setSlotsError] = useState<string | null>(null)
 
   const authHeaders = useCallback((): HeadersInit => {
     const h: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -97,11 +121,19 @@ export default function App() {
     setTools([])
     setStreamError(null)
     setLastRunPhase(null)
+    setPendingSlots(null)
+    setSlotValues({})
+    setSlotsPlanSummary(null)
+    setSlotsError(null)
   }
 
   const sendMessage = async () => {
     if (!sessionId) return
     setSendError(null)
+    setPendingSlots(null)
+    setSlotValues({})
+    setSlotsPlanSummary(null)
+    setSlotsError(null)
     const root = apiBase.replace(/\/$/, '')
     const res = await fetch(`${root}/api/v1/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -130,6 +162,35 @@ export default function App() {
       setConfirmPayload(null)
     } finally {
       setActionBusy(false)
+    }
+  }
+
+  const submitSlots = async () => {
+    if (!sessionId || !pendingSlots?.length) return
+    for (const s of pendingSlots) {
+      if (!(slotValues[s.variable] ?? '').trim()) {
+        setSlotsError(`Value required: ${s.variable}`)
+        return
+      }
+    }
+    setSlotsBusy(true)
+    setSlotsError(null)
+    const root = apiBase.replace(/\/$/, '')
+    try {
+      const res = await fetch(`${root}/api/v1/sessions/${sessionId}/actions`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ action: 'fill_slots', values: slotValues }),
+      })
+      if (!res.ok) {
+        setSlotsError(await formatHttpError(res))
+        return
+      }
+      setPendingSlots(null)
+      setSlotValues({})
+      setSlotsPlanSummary(null)
+    } finally {
+      setSlotsBusy(false)
     }
   }
 
@@ -179,6 +240,24 @@ export default function App() {
 
             if (eventName === 'started') {
               if (payload.planGraph != null) setPlanGraph(payload.planGraph)
+            }
+            if (eventName === 'slots_required') {
+              if (payload.planGraph != null) setPlanGraph(payload.planGraph)
+              const slots = parseSlotsPayload(payload.slots)
+              if (slots) {
+                setPendingSlots(slots)
+                setSlotValues((prev) => {
+                  const next = { ...prev }
+                  for (const s of slots) {
+                    if (next[s.variable] === undefined) next[s.variable] = ''
+                  }
+                  return next
+                })
+              }
+            }
+            if (eventName === 'slots_plan_summary') {
+              const s = payload.summary
+              if (typeof s === 'string' && s.trim()) setSlotsPlanSummary(s.trim())
             }
             if (eventName === 'run_phase') {
               const phase = payload.phase
@@ -324,13 +403,59 @@ export default function App() {
       </div>
 
       <div className="card">
-        <h2>Plan graph (from SSE started)</h2>
+        <h2>Plan graph (from SSE started / slots_required)</h2>
         {planGraph ? (
           <pre className="mono">{JSON.stringify(planGraph, null, 2)}</pre>
         ) : (
           <p style={{ color: '#64748b' }}>No plan yet.</p>
         )}
       </div>
+
+      {pendingSlots?.length ? (
+        <div className="card">
+          <h2>Values required (slots_required)</h2>
+          <p style={{ color: '#64748b', marginTop: 0 }}>
+            Submit via <code className="mono">POST …/actions</code> with{' '}
+            <code className="mono">{`{"action":"fill_slots","values":{…}}`}</code>.
+          </p>
+          {slotsPlanSummary ? (
+            <div style={{ marginBottom: '1rem', padding: '0.75rem', background: '#f1f5f9', borderRadius: 6 }}>
+              <strong>Summary</strong> (optional SSE <code className="mono">slots_plan_summary</code>)
+              <p style={{ margin: '0.5rem 0 0', whiteSpace: 'pre-wrap' }}>{slotsPlanSummary}</p>
+            </div>
+          ) : null}
+          {slotsError ? <p className="error">{slotsError}</p> : null}
+          {pendingSlots.map((s) => (
+            <div key={s.variable} className="field" style={{ marginBottom: '0.75rem' }}>
+              <label htmlFor={`slot-${s.variable}`}>{s.prompt || s.variable}</label>
+              {s.options.length ? (
+                <p style={{ margin: '0.25rem 0', fontSize: '0.85rem' }}>
+                  Quick pick:{' '}
+                  {s.options.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      style={{ marginRight: 6 }}
+                      onClick={() => setSlotValues((prev) => ({ ...prev, [s.variable]: opt }))}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </p>
+              ) : null}
+              <input
+                id={`slot-${s.variable}`}
+                name={s.variable}
+                value={slotValues[s.variable] ?? ''}
+                onChange={(e) => setSlotValues((prev) => ({ ...prev, [s.variable]: e.target.value }))}
+              />
+            </div>
+          ))}
+          <button type="button" disabled={slotsBusy} onClick={() => void submitSlots()}>
+            fill_slots
+          </button>
+        </div>
+      ) : null}
 
       <div className="card">
         <h2>Tool timeline (tool_start / tool_end)</h2>
