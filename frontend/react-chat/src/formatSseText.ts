@@ -26,7 +26,7 @@ function unwrapJsonStringBlob(s: string): string {
       try {
         cur = JSON.parse(inner)
       } catch {
-        return cur
+        return typeof cur === 'string' ? cur : s
       }
     }
     return typeof cur === 'string' ? cur : s
