@@ -93,8 +93,9 @@ def main() -> None:
                     )
                     commit = False
                 elif not r.ok:
+                    echoed = r.headers.get("X-Request-Id", req_id)
                     print(
-                        f"[warn] HTTP {r.status_code} -> DLQ (X-Request-Id={r.headers.get('X-Request-Id', req_id)})",
+                        f"[warn] HTTP {r.status_code} -> DLQ (X-Request-Id={echoed})",
                         flush=True,
                     )
                     producer.produce(TOPIC_DLQ, body.encode("utf-8"))
