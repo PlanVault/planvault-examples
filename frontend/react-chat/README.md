@@ -1,6 +1,6 @@
 # React Runtime chat example
 
-Vite + React 18 + TypeScript. Uses `fetch` with a readable stream for SSE so the project API key can be sent in `Authorization`.
+Vite + React 18 + TypeScript. Uses `fetch` with a readable stream for SSE so the project API key can be sent in `Authorization`. Every request adds a fresh **`X-Request-Id`** (UUID); HTTP errors append **`[support id: …]`** using the response header or RFC 7807 **`instance`** when present.
 
 ## Run
 

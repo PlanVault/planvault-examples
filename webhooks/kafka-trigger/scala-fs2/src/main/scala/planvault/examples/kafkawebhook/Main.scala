@@ -7,6 +7,8 @@ import sttp.client3._
 import sttp.client3.httpclient.fs2.HttpClientFs2Backend
 import sttp.model.Uri
 
+import java.util.UUID
+
 /** Consumes `planvault.triggers`, POSTs JSON to PlanVault inbound webhook with `X-Signature`.
   *
   * On HTTP 400 / 403 / 404 (bad body, legacy forbidden, or PlanVault’s unified “not found” for bad HMAC / unknown trigger),
@@ -46,10 +48,12 @@ object Main extends IOApp {
               .evalMap { comm =>
                 val raw = comm.record.value
                 val sig = WebhookSignature.hmacSha256Hex(cfg.secret, raw)
+                val reqId = UUID.randomUUID().toString
                 val req = basicRequest
                   .post(webhookUri)
                   .contentType("application/json")
                   .header("X-Signature", sig)
+                  .header("X-Request-Id", reqId)
                   .body(raw)
 
                 backend.send(req).attempt.flatMap {

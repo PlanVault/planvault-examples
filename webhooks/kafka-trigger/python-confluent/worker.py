@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 
 import requests
 from confluent_kafka import Consumer, KafkaException, Producer
@@ -65,6 +66,7 @@ def main() -> None:
 
             body, _ok_json = kafka_value_to_signed_body(raw_bytes)
             sig = hmac_sha256_hex(secret, body)
+            req_id = str(uuid.uuid4())
             commit = True
             try:
                 r = requests.post(
@@ -73,6 +75,7 @@ def main() -> None:
                     headers={
                         "Content-Type": "application/json",
                         "X-Signature": sig,
+                        "X-Request-Id": req_id,
                     },
                     timeout=60,
                 )
@@ -90,7 +93,10 @@ def main() -> None:
                     )
                     commit = False
                 elif not r.ok:
-                    print(f"[warn] HTTP {r.status_code} -> DLQ", flush=True)
+                    print(
+                        f"[warn] HTTP {r.status_code} -> DLQ (X-Request-Id={r.headers.get('X-Request-Id', req_id)})",
+                        flush=True,
+                    )
                     producer.produce(TOPIC_DLQ, body.encode("utf-8"))
                     producer.flush(10)
             except requests.RequestException as e:
