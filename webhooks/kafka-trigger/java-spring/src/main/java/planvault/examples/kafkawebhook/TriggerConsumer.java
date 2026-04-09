@@ -2,6 +2,7 @@
 package planvault.examples.kafkawebhook;
 
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -46,11 +47,13 @@ public class TriggerConsumer {
     try {
       String sig = WebhookSignature.hmacSha256Hex(secret, payload);
       String uri = baseUrl + "/api/v1/orgs/" + orgId + "/webhooks/" + triggerKey;
+      String requestId = UUID.randomUUID().toString();
       webClient
           .post()
           .uri(uri)
           .contentType(MediaType.APPLICATION_JSON)
           .header("X-Signature", sig)
+          .header("X-Request-Id", requestId)
           .bodyValue(payload)
           .retrieve()
           .toBodilessEntity()

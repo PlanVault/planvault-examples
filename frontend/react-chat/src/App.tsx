@@ -27,20 +27,38 @@ function parseSlotsPayload(raw: unknown): UiSlotField[] | null {
   return out.length ? out : null
 }
 
+function newRequestIdHeader(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `react-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`
+}
+
+/** Merge auth headers with a fresh X-Request-Id per HTTP call (PlanVault echoes it; errors may duplicate in `instance`). */
+function headersForApiCall(base: HeadersInit): Headers {
+  const h = new Headers(base)
+  h.set('X-Request-Id', newRequestIdHeader())
+  return h
+}
+
 /** Prefer RFC 7807 `detail` / `title` when the API returns `application/problem+json`. */
 async function formatHttpError(res: Response): Promise<string> {
   const raw = await res.text()
+  const hdrId = res.headers.get('X-Request-Id')?.trim()
   const ct = res.headers.get('content-type') ?? ''
   if (ct.includes('json') && raw) {
     try {
-      const j = JSON.parse(raw) as { title?: string; detail?: string }
+      const j = JSON.parse(raw) as { title?: string; detail?: string; instance?: string }
       const msg = j.detail?.trim() || j.title?.trim()
-      if (msg) return msg
+      const supportId = hdrId || (typeof j.instance === 'string' ? j.instance.trim() : '')
+      const suffix = supportId ? ` [support id: ${supportId}]` : ''
+      if (msg) return msg + suffix
     } catch {
       /* use raw */
     }
   }
-  return raw.trim() || `HTTP ${res.status}`
+  const base = raw.trim() || `HTTP ${res.status}`
+  return hdrId ? `${base} [support id: ${hdrId}]` : base
 }
 
 export default function App() {
@@ -125,7 +143,7 @@ export default function App() {
     const root = apiBase.replace(/\/$/, '')
     const res = await fetch(sessionsPrefix(root), {
       method: 'POST',
-      headers: authHeaders(),
+      headers: headersForApiCall(authHeaders()),
       body: JSON.stringify(body),
     })
     if (!res.ok) {
@@ -156,7 +174,7 @@ export default function App() {
     const root = apiBase.replace(/\/$/, '')
     const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/messages`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: headersForApiCall(authHeaders()),
       body: JSON.stringify({ message }),
     })
     if (!res.ok) {
@@ -176,7 +194,7 @@ export default function App() {
     try {
       const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/actions`, {
         method: 'POST',
-        headers: authHeaders(),
+        headers: headersForApiCall(authHeaders()),
         body: JSON.stringify({ action }),
       })
       if (!res.ok) {
@@ -203,7 +221,7 @@ export default function App() {
     try {
       const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/actions`, {
         method: 'POST',
-        headers: authHeaders(),
+        headers: headersForApiCall(authHeaders()),
         body: JSON.stringify({ action: 'fill_slots', values: slotValues }),
       })
       if (!res.ok) {
@@ -238,6 +256,7 @@ export default function App() {
           headers: {
             Authorization: `Bearer ${apiKey.trim()}`,
             Accept: 'text/event-stream',
+            'X-Request-Id': newRequestIdHeader(),
           },
           signal: ac.signal,
         })
