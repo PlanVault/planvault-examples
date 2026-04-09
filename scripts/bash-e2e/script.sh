@@ -12,7 +12,18 @@ BASE="${PLANVAULT_BASE_URL:-https://api.planvault.ai}"
 BASE="${BASE%/}"
 RT="$BASE/api/v1/projects/$PLANVAULT_PROJECT_ID/sessions"
 
-hdr_auth=(-H "Authorization: Bearer ${PLANVAULT_API_KEY}" -H "Content-Type: application/json")
+# Stable id for this run (PlanVault accepts [a-zA-Z0-9._~-]{1,128}); echoed in X-Request-Id on every response.
+if command -v openssl >/dev/null 2>&1; then
+  PV_REQ_ID="bash-e2e-$(openssl rand -hex 16)"
+else
+  PV_REQ_ID="bash-e2e-${RANDOM}-$$"
+fi
+hdr_auth=(
+  -H "Authorization: Bearer ${PLANVAULT_API_KEY}"
+  -H "Content-Type: application/json"
+  -H "X-Request-Id: ${PV_REQ_ID}"
+)
+echo "Using X-Request-Id=${PV_REQ_ID} (logs / support correlation)"
 
 echo "== POST $RT"
 sess_json="$(curl -fsS "${hdr_auth[@]}" -X POST "$RT" \
@@ -28,11 +39,7 @@ echo "== POST $RT/$sid/messages (expects HTTP 202 + messageId)"
 msg_json="$(curl -fsS "${hdr_auth[@]}" -X POST "$RT/$sid/messages" \
   -d '{"message":"Say hello in one short sentence."}')"
 mid="$(echo "$msg_json" | jq -r '.messageId // empty')"
-echo "messageId=$mid"
-if [[ -n "$mid" ]]; then
-  echo "== GET $RT/$sid/messages/$mid/status (once; pipeline continues async)"
-  curl -fsS "${hdr_auth[@]}" "$RT/$sid/messages/$mid/status" | jq .
-fi
+echo "messageId=$mid (correlate with SSE /chat or GET .../history — no per-message status endpoint)"
 
 echo "== Poll history for confirm_plan_required / done / error"
 deadline=$((SECONDS + 120))

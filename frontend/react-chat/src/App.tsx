@@ -27,33 +27,48 @@ function parseSlotsPayload(raw: unknown): UiSlotField[] | null {
   return out.length ? out : null
 }
 
-function runtimeSessionsBase(root: string, projectId: string): string {
-  const r = root.replace(/\/$/, '')
-  return `${r}/api/v1/projects/${projectId.trim()}/sessions`
+function newRequestIdHeader(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `react-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`
+}
+
+/** Merge auth headers with a fresh X-Request-Id per HTTP call (PlanVault echoes it; errors may duplicate in `instance`). */
+function headersForApiCall(base: HeadersInit): Headers {
+  const h = new Headers(base)
+  h.set('X-Request-Id', newRequestIdHeader())
+  return h
 }
 
 /** Prefer RFC 7807 `detail` / `title` when the API returns `application/problem+json`. */
 async function formatHttpError(res: Response): Promise<string> {
   const raw = await res.text()
+  const hdrId = res.headers.get('X-Request-Id')?.trim()
   const ct = res.headers.get('content-type') ?? ''
   if (ct.includes('json') && raw) {
     try {
-      const j = JSON.parse(raw) as { title?: string; detail?: string }
+      const j = JSON.parse(raw) as { title?: string; detail?: string; instance?: string }
       const msg = j.detail?.trim() || j.title?.trim()
-      if (msg) return msg
+      const supportId = hdrId || (typeof j.instance === 'string' ? j.instance.trim() : '')
+      const suffix = supportId ? ` [support id: ${supportId}]` : ''
+      if (msg) return msg + suffix
     } catch {
       /* use raw */
     }
   }
-  return raw.trim() || `HTTP ${res.status}`
+  const base = raw.trim() || `HTTP ${res.status}`
+  return hdrId ? `${base} [support id: ${hdrId}]` : base
 }
 
 export default function App() {
   const [apiBase, setApiBase] = useState(
     () => import.meta.env.VITE_PLANVAULT_BASE_URL?.trim() || 'https://api.planvault.ai',
   )
+  const [projectId, setProjectId] = useState(
+    () => import.meta.env.VITE_PLANVAULT_PROJECT_ID?.trim() || '',
+  )
   const [apiKey, setApiKey] = useState(() => import.meta.env.VITE_PLANVAULT_API_KEY?.trim() || '')
-  const [projectId, setProjectId] = useState(() => import.meta.env.VITE_PLANVAULT_PROJECT_ID?.trim() || '')
   const [externalUserId, setExternalUserId] = useState('demo-user')
   /** Comma-separated session tags (optional); sent as string[] — case-sensitive on the server. */
   const [tagsText, setTagsText] = useState('react-chat-example')
@@ -65,10 +80,8 @@ export default function App() {
 
   const [message, setMessage] = useState('Hello — run a short plan.')
   const [sendError, setSendError] = useState<string | null>(null)
-  /** Last successful POST .../messages acknowledgement (HTTP 202 body includes messageId; pipeline runs async). */
+  /** Last successful POST /messages acknowledgement (API returns messageId immediately; pipeline runs async). */
   const [sendAck, setSendAck] = useState<{ status: string; messageId: string } | null>(null)
-  /** Latest row from GET .../messages/{messageId}/status (polled until completed/failed). */
-  const [pipelineStatusLine, setPipelineStatusLine] = useState<string | null>(null)
 
   const [planGraph, setPlanGraph] = useState<unknown | null>(null)
   const [tools, setTools] = useState<ToolStep[]>([])
@@ -94,6 +107,11 @@ export default function App() {
     return h
   }, [apiKey])
 
+  const sessionsPrefix = useCallback((root: string) => {
+    const pid = projectId.trim()
+    return `${root}/api/v1/projects/${encodeURIComponent(pid)}/sessions`
+  }, [projectId])
+
   const createSession = async () => {
     setSessionError(null)
     setContextError(null)
@@ -111,7 +129,7 @@ export default function App() {
       return
     }
     if (!projectId.trim()) {
-      setSessionError('Project ID is required (must match the API key’s project UUID)')
+      setSessionError('Project ID is required (must match this API key)')
       return
     }
     const tags = tagsText
@@ -122,10 +140,10 @@ export default function App() {
     const ext = externalUserId.trim()
     if (ext) body.externalUserId = ext
     if (tags.length) body.tags = tags
-    const base = runtimeSessionsBase(apiBase, projectId)
-    const res = await fetch(base, {
+    const root = apiBase.replace(/\/$/, '')
+    const res = await fetch(sessionsPrefix(root), {
       method: 'POST',
-      headers: authHeaders(),
+      headers: headersForApiCall(authHeaders()),
       body: JSON.stringify(body),
     })
     if (!res.ok) {
@@ -143,26 +161,20 @@ export default function App() {
     setSlotsPlanSummary(null)
     setSlotsError(null)
     setSendAck(null)
-    setPipelineStatusLine(null)
   }
 
   const sendMessage = async () => {
     if (!sessionId) return
     setSendError(null)
     setSendAck(null)
-    setPipelineStatusLine(null)
     setPendingSlots(null)
     setSlotValues({})
     setSlotsPlanSummary(null)
     setSlotsError(null)
-    if (!projectId.trim()) {
-      setSendError('Project ID is required')
-      return
-    }
-    const base = runtimeSessionsBase(apiBase, projectId)
-    const res = await fetch(`${base}/${sessionId}/messages`, {
+    const root = apiBase.replace(/\/$/, '')
+    const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/messages`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: headersForApiCall(authHeaders()),
       body: JSON.stringify({ message }),
     })
     if (!res.ok) {
@@ -175,54 +187,14 @@ export default function App() {
       setSendAck({ status: typeof data.status === 'string' ? data.status : 'ok', messageId: mid })
   }
 
-  /** Poll message pipeline status (complements SSE /chat). */
-  useEffect(() => {
-    if (!sessionId || !apiKey.trim() || !projectId.trim() || !sendAck?.messageId) {
-      setPipelineStatusLine(null)
-      return
-    }
-    const base = runtimeSessionsBase(apiBase, projectId)
-    const messageId = sendAck.messageId
-    let cancelled = false
-    let timeoutId: ReturnType<typeof setTimeout> | undefined
-
-    const tick = async () => {
-      if (cancelled) return
-      try {
-        const r = await fetch(
-          `${base}/${sessionId}/messages/${encodeURIComponent(messageId)}/status`,
-          { headers: { Authorization: `Bearer ${apiKey.trim()}` } },
-        )
-        if (!r.ok || cancelled) return
-        const j = (await r.json()) as { status: string; userError?: string | null }
-        if (cancelled) return
-        const line =
-          j.userError && String(j.userError).trim()
-            ? `${j.status} — ${String(j.userError).trim()}`
-            : j.status
-        setPipelineStatusLine(line)
-        if (j.status === 'completed' || j.status === 'failed') return
-      } catch {
-        /* ignore transient poll errors */
-      }
-      if (!cancelled) timeoutId = setTimeout(() => void tick(), 2000)
-    }
-
-    void tick()
-    return () => {
-      cancelled = true
-      if (timeoutId !== undefined) clearTimeout(timeoutId)
-    }
-  }, [sessionId, apiKey, apiBase, projectId, sendAck?.messageId])
-
   const postAction = async (action: 'approve' | 'reject') => {
-    if (!sessionId || !projectId.trim()) return
+    if (!sessionId) return
     setActionBusy(true)
-    const base = runtimeSessionsBase(apiBase, projectId)
+    const root = apiBase.replace(/\/$/, '')
     try {
-      const res = await fetch(`${base}/${sessionId}/actions`, {
+      const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/actions`, {
         method: 'POST',
-        headers: authHeaders(),
+        headers: headersForApiCall(authHeaders()),
         body: JSON.stringify({ action }),
       })
       if (!res.ok) {
@@ -236,7 +208,7 @@ export default function App() {
   }
 
   const submitSlots = async () => {
-    if (!sessionId || !projectId.trim() || !pendingSlots?.length) return
+    if (!sessionId || !pendingSlots?.length) return
     for (const s of pendingSlots) {
       if (!(slotValues[s.variable] ?? '').trim()) {
         setSlotsError(`Value required: ${s.variable}`)
@@ -245,11 +217,11 @@ export default function App() {
     }
     setSlotsBusy(true)
     setSlotsError(null)
-    const base = runtimeSessionsBase(apiBase, projectId)
+    const root = apiBase.replace(/\/$/, '')
     try {
-      const res = await fetch(`${base}/${sessionId}/actions`, {
+      const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/actions`, {
         method: 'POST',
-        headers: authHeaders(),
+        headers: headersForApiCall(authHeaders()),
         body: JSON.stringify({ action: 'fill_slots', values: slotValues }),
       })
       if (!res.ok) {
@@ -270,7 +242,7 @@ export default function App() {
       return
     }
 
-    const base = runtimeSessionsBase(apiBase, projectId)
+    const root = apiBase.replace(/\/$/, '')
     const ac = new AbortController()
     setStreamConn('connecting')
     setStreamError(null)
@@ -280,10 +252,11 @@ export default function App() {
 
     const run = async () => {
       try {
-        const res = await fetch(`${base}/${sessionId}/chat`, {
+        const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/chat`, {
           headers: {
             Authorization: `Bearer ${apiKey.trim()}`,
             Accept: 'text/event-stream',
+            'X-Request-Id': newRequestIdHeader(),
           },
           signal: ac.signal,
         })
@@ -395,7 +368,7 @@ export default function App() {
     return () => {
       ac.abort()
     }
-  }, [sessionId, apiKey, apiBase, projectId])
+  }, [sessionId, apiKey, apiBase, projectId, sessionsPrefix])
 
   return (
     <>
@@ -414,6 +387,18 @@ export default function App() {
           />
         </div>
         <div className="field">
+          <label htmlFor="pid">Project ID (UUID)</label>
+          <input
+            id="pid"
+            name="pid"
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            placeholder="same project as the API key"
+            autoComplete="off"
+            className="mono"
+          />
+        </div>
+        <div className="field">
           <label htmlFor="key">Project API key</label>
           <input
             id="key"
@@ -423,17 +408,6 @@ export default function App() {
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="Bearer project key"
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="project">Project ID (UUID)</label>
-          <input
-            id="project"
-            name="project"
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            placeholder="Same project as the API key"
-            autoComplete="off"
           />
         </div>
       </div>
@@ -488,21 +462,14 @@ export default function App() {
           <label htmlFor="msg">Message</label>
           <textarea id="msg" name="msg" value={message} onChange={(e) => setMessage(e.target.value)} />
         </div>
-        <button type="button" disabled={!sessionId || !projectId.trim()} onClick={() => void sendMessage()}>
-          POST …/projects/…/sessions/…/messages
+        <button type="button" disabled={!sessionId} onClick={() => void sendMessage()}>
+          POST …/sessions/…/messages
         </button>
         {sendError ? <p className="error">{sendError}</p> : null}
         {sendAck ? (
           <p style={{ marginTop: '0.75rem', color: '#64748b', fontSize: '0.9rem' }}>
             Response: <code className="mono">{sendAck.status}</code> · <code className="mono">{sendAck.messageId}</code>{' '}
-            <span style={{ opacity: 0.85 }}>
-              (poll <code className="mono">GET …/messages/{'{messageId}'}/status</code>)
-            </span>
-          </p>
-        ) : null}
-        {pipelineStatusLine ? (
-          <p style={{ marginTop: '0.35rem' }}>
-            Pipeline status: <code className="mono">{pipelineStatusLine}</code>
+            <span style={{ opacity: 0.85 }}>(correlate with SSE / history)</span>
           </p>
         ) : null}
       </div>

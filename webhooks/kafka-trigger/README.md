@@ -8,6 +8,8 @@ Consumes JSON messages from topic `planvault.triggers`, signs the **exact** UTF-
 
 PlanVault verifies the signature against the canonical JSON (`body.noSpaces` after parse). Use **compact JSON** (no extra spaces) so your bytes match the server.
 
+Each worker `POST` includes a fresh **`X-Request-Id`** so inbound webhook handling and downstream session logs can be correlated with your Kafka consumer logs.
+
 ## Broker (Redpanda)
 
 From this directory:
