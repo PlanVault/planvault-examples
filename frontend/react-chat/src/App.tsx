@@ -27,6 +27,11 @@ function parseSlotsPayload(raw: unknown): UiSlotField[] | null {
   return out.length ? out : null
 }
 
+function runtimeSessionsBase(root: string, projectId: string): string {
+  const r = root.replace(/\/$/, '')
+  return `${r}/api/v1/projects/${projectId.trim()}/sessions`
+}
+
 /** Prefer RFC 7807 `detail` / `title` when the API returns `application/problem+json`. */
 async function formatHttpError(res: Response): Promise<string> {
   const raw = await res.text()
@@ -48,6 +53,7 @@ export default function App() {
     () => import.meta.env.VITE_PLANVAULT_BASE_URL?.trim() || 'https://api.planvault.ai',
   )
   const [apiKey, setApiKey] = useState(() => import.meta.env.VITE_PLANVAULT_API_KEY?.trim() || '')
+  const [projectId, setProjectId] = useState(() => import.meta.env.VITE_PLANVAULT_PROJECT_ID?.trim() || '')
   const [externalUserId, setExternalUserId] = useState('demo-user')
   /** Comma-separated session tags (optional); sent as string[] — case-sensitive on the server. */
   const [tagsText, setTagsText] = useState('react-chat-example')
@@ -59,7 +65,7 @@ export default function App() {
 
   const [message, setMessage] = useState('Hello — run a short plan.')
   const [sendError, setSendError] = useState<string | null>(null)
-  /** Last successful POST /messages acknowledgement (API returns messageId immediately; pipeline runs async). */
+  /** Last successful POST .../messages acknowledgement (HTTP 202 body includes messageId; pipeline runs async). */
   const [sendAck, setSendAck] = useState<{ status: string; messageId: string } | null>(null)
   /** Latest row from GET .../messages/{messageId}/status (polled until completed/failed). */
   const [pipelineStatusLine, setPipelineStatusLine] = useState<string | null>(null)
@@ -104,6 +110,10 @@ export default function App() {
       setSessionError('API key is required')
       return
     }
+    if (!projectId.trim()) {
+      setSessionError('Project ID is required (must match the API key’s project UUID)')
+      return
+    }
     const tags = tagsText
       .split(',')
       .map((s) => s.trim())
@@ -112,8 +122,8 @@ export default function App() {
     const ext = externalUserId.trim()
     if (ext) body.externalUserId = ext
     if (tags.length) body.tags = tags
-    const root = apiBase.replace(/\/$/, '')
-    const res = await fetch(`${root}/api/v1/sessions`, {
+    const base = runtimeSessionsBase(apiBase, projectId)
+    const res = await fetch(base, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(body),
@@ -145,11 +155,15 @@ export default function App() {
     setSlotValues({})
     setSlotsPlanSummary(null)
     setSlotsError(null)
-    const root = apiBase.replace(/\/$/, '')
-    const res = await fetch(`${root}/api/v1/sessions/${sessionId}/messages`, {
+    if (!projectId.trim()) {
+      setSendError('Project ID is required')
+      return
+    }
+    const base = runtimeSessionsBase(apiBase, projectId)
+    const res = await fetch(`${base}/${sessionId}/messages`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ message, autoExecute: true }),
+      body: JSON.stringify({ message }),
     })
     if (!res.ok) {
       setSendError(await formatHttpError(res))
@@ -163,11 +177,11 @@ export default function App() {
 
   /** Poll message pipeline status (complements SSE /chat). */
   useEffect(() => {
-    if (!sessionId || !apiKey.trim() || !sendAck?.messageId) {
+    if (!sessionId || !apiKey.trim() || !projectId.trim() || !sendAck?.messageId) {
       setPipelineStatusLine(null)
       return
     }
-    const root = apiBase.replace(/\/$/, '')
+    const base = runtimeSessionsBase(apiBase, projectId)
     const messageId = sendAck.messageId
     let cancelled = false
     let timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -176,7 +190,7 @@ export default function App() {
       if (cancelled) return
       try {
         const r = await fetch(
-          `${root}/api/v1/sessions/${sessionId}/messages/${encodeURIComponent(messageId)}/status`,
+          `${base}/${sessionId}/messages/${encodeURIComponent(messageId)}/status`,
           { headers: { Authorization: `Bearer ${apiKey.trim()}` } },
         )
         if (!r.ok || cancelled) return
@@ -199,14 +213,14 @@ export default function App() {
       cancelled = true
       if (timeoutId !== undefined) clearTimeout(timeoutId)
     }
-  }, [sessionId, apiKey, apiBase, sendAck?.messageId])
+  }, [sessionId, apiKey, apiBase, projectId, sendAck?.messageId])
 
   const postAction = async (action: 'approve' | 'reject') => {
-    if (!sessionId) return
+    if (!sessionId || !projectId.trim()) return
     setActionBusy(true)
-    const root = apiBase.replace(/\/$/, '')
+    const base = runtimeSessionsBase(apiBase, projectId)
     try {
-      const res = await fetch(`${root}/api/v1/sessions/${sessionId}/actions`, {
+      const res = await fetch(`${base}/${sessionId}/actions`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ action }),
@@ -222,7 +236,7 @@ export default function App() {
   }
 
   const submitSlots = async () => {
-    if (!sessionId || !pendingSlots?.length) return
+    if (!sessionId || !projectId.trim() || !pendingSlots?.length) return
     for (const s of pendingSlots) {
       if (!(slotValues[s.variable] ?? '').trim()) {
         setSlotsError(`Value required: ${s.variable}`)
@@ -231,9 +245,9 @@ export default function App() {
     }
     setSlotsBusy(true)
     setSlotsError(null)
-    const root = apiBase.replace(/\/$/, '')
+    const base = runtimeSessionsBase(apiBase, projectId)
     try {
-      const res = await fetch(`${root}/api/v1/sessions/${sessionId}/actions`, {
+      const res = await fetch(`${base}/${sessionId}/actions`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ action: 'fill_slots', values: slotValues }),
@@ -251,12 +265,12 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!sessionId || !apiKey.trim()) {
+    if (!sessionId || !apiKey.trim() || !projectId.trim()) {
       setStreamConn('off')
       return
     }
 
-    const root = apiBase.replace(/\/$/, '')
+    const base = runtimeSessionsBase(apiBase, projectId)
     const ac = new AbortController()
     setStreamConn('connecting')
     setStreamError(null)
@@ -266,7 +280,7 @@ export default function App() {
 
     const run = async () => {
       try {
-        const res = await fetch(`${root}/api/v1/sessions/${sessionId}/chat`, {
+        const res = await fetch(`${base}/${sessionId}/chat`, {
           headers: {
             Authorization: `Bearer ${apiKey.trim()}`,
             Accept: 'text/event-stream',
@@ -381,7 +395,7 @@ export default function App() {
     return () => {
       ac.abort()
     }
-  }, [sessionId, apiKey, apiBase])
+  }, [sessionId, apiKey, apiBase, projectId])
 
   return (
     <>
@@ -409,6 +423,17 @@ export default function App() {
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="Bearer project key"
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="project">Project ID (UUID)</label>
+          <input
+            id="project"
+            name="project"
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            placeholder="Same project as the API key"
+            autoComplete="off"
           />
         </div>
       </div>
@@ -441,7 +466,7 @@ export default function App() {
           {contextError ? <p className="error">{contextError}</p> : null}
         </div>
         <button type="button" onClick={() => void createSession()}>
-          POST /api/v1/sessions
+          POST /api/v1/projects/…/sessions
         </button>
         {sessionError ? <p className="error">{sessionError}</p> : null}
         {sessionId ? (
@@ -463,8 +488,8 @@ export default function App() {
           <label htmlFor="msg">Message</label>
           <textarea id="msg" name="msg" value={message} onChange={(e) => setMessage(e.target.value)} />
         </div>
-        <button type="button" disabled={!sessionId} onClick={() => void sendMessage()}>
-          POST /api/v1/sessions/…/messages
+        <button type="button" disabled={!sessionId || !projectId.trim()} onClick={() => void sendMessage()}>
+          POST …/projects/…/sessions/…/messages
         </button>
         {sendError ? <p className="error">{sendError}</p> : null}
         {sendAck ? (
