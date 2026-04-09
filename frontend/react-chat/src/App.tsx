@@ -47,6 +47,9 @@ export default function App() {
   const [apiBase, setApiBase] = useState(
     () => import.meta.env.VITE_PLANVAULT_BASE_URL?.trim() || 'https://api.planvault.ai',
   )
+  const [projectId, setProjectId] = useState(
+    () => import.meta.env.VITE_PLANVAULT_PROJECT_ID?.trim() || '',
+  )
   const [apiKey, setApiKey] = useState(() => import.meta.env.VITE_PLANVAULT_API_KEY?.trim() || '')
   const [externalUserId, setExternalUserId] = useState('demo-user')
   /** Comma-separated session tags (optional); sent as string[] — case-sensitive on the server. */
@@ -61,8 +64,6 @@ export default function App() {
   const [sendError, setSendError] = useState<string | null>(null)
   /** Last successful POST /messages acknowledgement (API returns messageId immediately; pipeline runs async). */
   const [sendAck, setSendAck] = useState<{ status: string; messageId: string } | null>(null)
-  /** Latest row from GET .../messages/{messageId}/status (polled until completed/failed). */
-  const [pipelineStatusLine, setPipelineStatusLine] = useState<string | null>(null)
 
   const [planGraph, setPlanGraph] = useState<unknown | null>(null)
   const [tools, setTools] = useState<ToolStep[]>([])
@@ -88,6 +89,11 @@ export default function App() {
     return h
   }, [apiKey])
 
+  const sessionsPrefix = useCallback((root: string) => {
+    const pid = projectId.trim()
+    return `${root}/api/v1/projects/${encodeURIComponent(pid)}/sessions`
+  }, [projectId])
+
   const createSession = async () => {
     setSessionError(null)
     setContextError(null)
@@ -104,6 +110,10 @@ export default function App() {
       setSessionError('API key is required')
       return
     }
+    if (!projectId.trim()) {
+      setSessionError('Project ID is required (must match this API key)')
+      return
+    }
     const tags = tagsText
       .split(',')
       .map((s) => s.trim())
@@ -113,7 +123,7 @@ export default function App() {
     if (ext) body.externalUserId = ext
     if (tags.length) body.tags = tags
     const root = apiBase.replace(/\/$/, '')
-    const res = await fetch(`${root}/api/v1/sessions`, {
+    const res = await fetch(sessionsPrefix(root), {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(body),
@@ -133,23 +143,21 @@ export default function App() {
     setSlotsPlanSummary(null)
     setSlotsError(null)
     setSendAck(null)
-    setPipelineStatusLine(null)
   }
 
   const sendMessage = async () => {
     if (!sessionId) return
     setSendError(null)
     setSendAck(null)
-    setPipelineStatusLine(null)
     setPendingSlots(null)
     setSlotValues({})
     setSlotsPlanSummary(null)
     setSlotsError(null)
     const root = apiBase.replace(/\/$/, '')
-    const res = await fetch(`${root}/api/v1/sessions/${sessionId}/messages`, {
+    const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/messages`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ message, autoExecute: true }),
+      body: JSON.stringify({ message }),
     })
     if (!res.ok) {
       setSendError(await formatHttpError(res))
@@ -161,52 +169,12 @@ export default function App() {
       setSendAck({ status: typeof data.status === 'string' ? data.status : 'ok', messageId: mid })
   }
 
-  /** Poll message pipeline status (complements SSE /chat). */
-  useEffect(() => {
-    if (!sessionId || !apiKey.trim() || !sendAck?.messageId) {
-      setPipelineStatusLine(null)
-      return
-    }
-    const root = apiBase.replace(/\/$/, '')
-    const messageId = sendAck.messageId
-    let cancelled = false
-    let timeoutId: ReturnType<typeof setTimeout> | undefined
-
-    const tick = async () => {
-      if (cancelled) return
-      try {
-        const r = await fetch(
-          `${root}/api/v1/sessions/${sessionId}/messages/${encodeURIComponent(messageId)}/status`,
-          { headers: { Authorization: `Bearer ${apiKey.trim()}` } },
-        )
-        if (!r.ok || cancelled) return
-        const j = (await r.json()) as { status: string; userError?: string | null }
-        if (cancelled) return
-        const line =
-          j.userError && String(j.userError).trim()
-            ? `${j.status} — ${String(j.userError).trim()}`
-            : j.status
-        setPipelineStatusLine(line)
-        if (j.status === 'completed' || j.status === 'failed') return
-      } catch {
-        /* ignore transient poll errors */
-      }
-      if (!cancelled) timeoutId = setTimeout(() => void tick(), 2000)
-    }
-
-    void tick()
-    return () => {
-      cancelled = true
-      if (timeoutId !== undefined) clearTimeout(timeoutId)
-    }
-  }, [sessionId, apiKey, apiBase, sendAck?.messageId])
-
   const postAction = async (action: 'approve' | 'reject') => {
     if (!sessionId) return
     setActionBusy(true)
     const root = apiBase.replace(/\/$/, '')
     try {
-      const res = await fetch(`${root}/api/v1/sessions/${sessionId}/actions`, {
+      const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/actions`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ action }),
@@ -233,7 +201,7 @@ export default function App() {
     setSlotsError(null)
     const root = apiBase.replace(/\/$/, '')
     try {
-      const res = await fetch(`${root}/api/v1/sessions/${sessionId}/actions`, {
+      const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/actions`, {
         method: 'POST',
         headers: authHeaders(),
         body: JSON.stringify({ action: 'fill_slots', values: slotValues }),
@@ -251,7 +219,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!sessionId || !apiKey.trim()) {
+    if (!sessionId || !apiKey.trim() || !projectId.trim()) {
       setStreamConn('off')
       return
     }
@@ -266,7 +234,7 @@ export default function App() {
 
     const run = async () => {
       try {
-        const res = await fetch(`${root}/api/v1/sessions/${sessionId}/chat`, {
+        const res = await fetch(`${sessionsPrefix(root)}/${sessionId}/chat`, {
           headers: {
             Authorization: `Bearer ${apiKey.trim()}`,
             Accept: 'text/event-stream',
@@ -381,7 +349,7 @@ export default function App() {
     return () => {
       ac.abort()
     }
-  }, [sessionId, apiKey, apiBase])
+  }, [sessionId, apiKey, apiBase, projectId, sessionsPrefix])
 
   return (
     <>
@@ -397,6 +365,18 @@ export default function App() {
             value={apiBase}
             onChange={(e) => setApiBase(e.target.value)}
             placeholder="https://api.planvault.ai"
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="pid">Project ID (UUID)</label>
+          <input
+            id="pid"
+            name="pid"
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            placeholder="same project as the API key"
+            autoComplete="off"
+            className="mono"
           />
         </div>
         <div className="field">
@@ -441,7 +421,7 @@ export default function App() {
           {contextError ? <p className="error">{contextError}</p> : null}
         </div>
         <button type="button" onClick={() => void createSession()}>
-          POST /api/v1/sessions
+          POST /api/v1/projects/…/sessions
         </button>
         {sessionError ? <p className="error">{sessionError}</p> : null}
         {sessionId ? (
@@ -464,20 +444,13 @@ export default function App() {
           <textarea id="msg" name="msg" value={message} onChange={(e) => setMessage(e.target.value)} />
         </div>
         <button type="button" disabled={!sessionId} onClick={() => void sendMessage()}>
-          POST /api/v1/sessions/…/messages
+          POST …/sessions/…/messages
         </button>
         {sendError ? <p className="error">{sendError}</p> : null}
         {sendAck ? (
           <p style={{ marginTop: '0.75rem', color: '#64748b', fontSize: '0.9rem' }}>
             Response: <code className="mono">{sendAck.status}</code> · <code className="mono">{sendAck.messageId}</code>{' '}
-            <span style={{ opacity: 0.85 }}>
-              (poll <code className="mono">GET …/messages/{'{messageId}'}/status</code>)
-            </span>
-          </p>
-        ) : null}
-        {pipelineStatusLine ? (
-          <p style={{ marginTop: '0.35rem' }}>
-            Pipeline status: <code className="mono">{pipelineStatusLine}</code>
+            <span style={{ opacity: 0.85 }}>(correlate with SSE / history)</span>
           </p>
         ) : null}
       </div>

@@ -23,7 +23,7 @@ python main.py
 1. Create the server (replace `ADMIN_BEARER`, org id, and absolute paths):
 
 ```bash
-curl -s -X POST "$PLANVAULT_BASE_URL/admin/orgs/$ORG_ID/mcp/servers" \
+curl -s -X POST "$PLANVAULT_BASE_URL/admin/v1/orgs/$ORG_ID/mcp/servers" \
   -H "Authorization: Bearer $ADMIN_BEARER" \
   -H "Content-Type: application/json" \
   -d '{
@@ -42,7 +42,7 @@ The Admin API has **no working-directory field**; use an absolute path in `args`
 2. Import tool definitions into the org catalog:
 
 ```bash
-curl -s -X POST "$PLANVAULT_BASE_URL/admin/orgs/$ORG_ID/mcp/servers/$SERVER_ID/sync" \
+curl -s -X POST "$PLANVAULT_BASE_URL/admin/v1/orgs/$ORG_ID/mcp/servers/$SERVER_ID/sync" \
   -H "Authorization: Bearer $ADMIN_BEARER"
 ```
 
