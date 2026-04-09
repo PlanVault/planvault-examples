@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Incrementally parse PlanVault session SSE (`GET /api/v1/sessions/{id}/chat`).
+ * Incrementally parse PlanVault session SSE (`GET /api/v1/projects/{projectId}/sessions/{id}/chat`).
  * Each complete block may include `event:` and one or more `data:` lines; yields the tail
  * that has not yet ended with a blank line.
  */
