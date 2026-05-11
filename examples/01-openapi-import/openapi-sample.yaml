@@ -1,0 +1,214 @@
+openapi: "3.0.3"
+info:
+  title: "Task Management API"
+  description: >
+    Sample REST API that demonstrates OpenAPI import into PlanVault.
+    Import this spec via POST /admin/v1/orgs/{orgId}/tools to make
+    all operations available as AI-callable tools in your organisation.
+  version: "1.0.0"
+servers:
+  - url: "https://api.example.com/v1"
+    description: "Production"
+
+paths:
+  /tasks:
+    get:
+      operationId: listTasks
+      summary: List tasks
+      description: >
+        Returns tasks visible to the authenticated user.
+        Filter by status to narrow results.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: "Filter by task status"
+          schema:
+            type: string
+            enum: [open, in_progress, done]
+        - name: assignee
+          in: query
+          required: false
+          description: "Filter by assignee username"
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Array of tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Task"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      operationId: createTask
+      summary: Create a task
+      description: Creates a new task and returns it with a server-assigned ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTaskRequest"
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /tasks/{id}:
+    get:
+      operationId: getTask
+      summary: Get task by ID
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "200":
+          description: Task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      operationId: updateTaskStatus
+      summary: Update task status
+      description: Transitions a task to a new status. Only the current assignee or an admin may update.
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [open, in_progress, done]
+                  description: "New status for the task"
+                comment:
+                  type: string
+                  description: "Optional comment recorded with the status change"
+              required: [status]
+      responses:
+        "200":
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      operationId: deleteTask
+      summary: Delete task
+      parameters:
+        - $ref: "#/components/parameters/TaskId"
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      description: "Task UUID"
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [open, in_progress, done]
+        assignee:
+          type: string
+          description: "Username of the assignee (null if unassigned)"
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, title, status, createdAt, updatedAt]
+
+    CreateTaskRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          description: "Short title for the task (required)"
+        description:
+          type: string
+          description: "Detailed description (optional)"
+        assignee:
+          type: string
+          description: "Username to assign immediately (optional)"
+      required: [title]
+
+  responses:
+    Unauthorized:
+      description: "Missing or invalid credentials"
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            properties:
+              title: { type: string }
+              status: { type: integer }
+    BadRequest:
+      description: "Validation error"
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            properties:
+              title: { type: string }
+              detail: { type: string }
+              status: { type: integer }
+    NotFound:
+      description: "Resource not found"
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            properties:
+              title: { type: string }
+              status: { type: integer }
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+security:
+  - BearerAuth: []

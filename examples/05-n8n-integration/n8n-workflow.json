@@ -1,0 +1,194 @@
+{
+  "name": "PlanVault — Governed AI Execution Step",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "planvault-trigger",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "planvault-trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PLANVAULT_BASE_URL }}/api/v1/projects/={{ $env.PLANVAULT_PROJECT_ID }}/sessions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.PLANVAULT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-Request-Id", "value": "={{ $runIndex }}-{{ $now.toISO() }}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "contextVars", "value": "={}" },
+            { "name": "tags", "value": "=[\"n8n\"]" },
+            { "name": "externalUserId", "value": "=n8n-workflow" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-create-session",
+      "name": "Create PlanVault Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PLANVAULT_BASE_URL }}/api/v1/projects/={{ $env.PLANVAULT_PROJECT_ID }}/sessions/={{ $('Create PlanVault Session').item.json.id }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.PLANVAULT_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "message", "value": "={{ $('Webhook').item.json.body.prompt ?? $('Webhook').item.json.body.message ?? '' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-send-message",
+      "name": "Send Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "node-wait",
+      "name": "Wait 2s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PLANVAULT_BASE_URL }}/api/v1/projects/={{ $env.PLANVAULT_PROJECT_ID }}/sessions/={{ $('Create PlanVault Session').item.json.id }}/history",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.PLANVAULT_API_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-poll-history",
+      "name": "Poll History",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-done",
+              "leftValue": "={{ $json.events.some(e => e.eventType === 'done' || e.eventType === 'error') }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-check-done",
+      "name": "Done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      },
+      "id": "node-wait-retry",
+      "name": "Wait 2s (retry)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract last llm_reply from history events.\nconst events = $input.first().json.events ?? [];\nconst reply = [...events].reverse().find(e => e.eventType === 'llm_reply');\nconst result = reply?.content ?? reply?.text ?? '';\nconst sessionId = $('Create PlanVault Session').first().json.id;\nconst hasError = events.some(e => e.eventType === 'error');\nreturn [{ json: { result, sessionId, status: hasError ? 'error' : 'done', events } }];"
+      },
+      "id": "node-extract-result",
+      "name": "Extract Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ result: $json.result, sessionId: $json.sessionId, status: $json.status }) }}",
+        "options": {}
+      },
+      "id": "node-respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1540, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Create PlanVault Session", "type": "main", "index": 0 }]]
+    },
+    "Create PlanVault Session": {
+      "main": [[{ "node": "Send Message", "type": "main", "index": 0 }]]
+    },
+    "Send Message": {
+      "main": [[{ "node": "Wait 2s", "type": "main", "index": 0 }]]
+    },
+    "Wait 2s": {
+      "main": [[{ "node": "Poll History", "type": "main", "index": 0 }]]
+    },
+    "Poll History": {
+      "main": [[{ "node": "Done?", "type": "main", "index": 0 }]]
+    },
+    "Done?": {
+      "main": [
+        [{ "node": "Extract Result", "type": "main", "index": 0 }],
+        [{ "node": "Wait 2s (retry)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Wait 2s (retry)": {
+      "main": [[{ "node": "Poll History", "type": "main", "index": 0 }]]
+    },
+    "Extract Result": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["planvault", "ai-execution", "n8n-integration"],
+  "triggerCount": 1,
+  "updatedAt": "2026-05-11T00:00:00.000Z",
+  "versionId": "1"
+}
