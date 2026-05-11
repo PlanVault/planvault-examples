@@ -41,13 +41,22 @@ msg_json="$(curl -fsS "${hdr_auth[@]}" -X POST "$RT/$sid/messages" \
 mid="$(echo "$msg_json" | jq -r '.messageId // empty')"
 echo "messageId=$mid (correlate with SSE /chat or GET .../history — no per-message status endpoint)"
 
-echo "== Poll history for confirm_plan_required / done / error"
+echo "== Poll history for confirm_plan_required / awaiting_signal / done / error"
 deadline=$((SECONDS + 120))
 need_approve=false
+need_signal=false
+signal_token_id=""
 while (( SECONDS < deadline )); do
   hist="$(curl -fsS "${hdr_auth[@]}" "$RT/$sid/history")"
   if echo "$hist" | jq -e '.events[]? | select(.eventType=="confirm_plan_required")' >/dev/null 2>&1; then
     need_approve=true
+    break
+  fi
+  if echo "$hist" | jq -e '.events[]? | select(.eventType=="awaiting_signal")' >/dev/null 2>&1; then
+    need_signal=true
+    signal_token_id="$(echo "$hist" | jq -r \
+      '.events[]? | select(.eventType=="awaiting_signal") | (.tokenId // .payload.tokenId) // empty' \
+      | head -1)"
     break
   fi
   if echo "$hist" | jq -e '.events[]? | select(.eventType=="done" or .eventType=="error")' >/dev/null 2>&1; then
@@ -67,6 +76,33 @@ if [[ "$need_approve" == true ]]; then
     fi
     sleep 2
   done
+fi
+
+if [[ "$need_signal" == true ]]; then
+  if [[ -n "${PLANVAULT_SIGNAL_SECRET:-}" && -n "$signal_token_id" ]]; then
+    echo "== POST $BASE/api/v1/projects/$PLANVAULT_PROJECT_ID/callbacks/$signal_token_id (wait_for_signal delivery)"
+    curl -fsS \
+      -H "Authorization: Bearer ${signal_token_id}:${PLANVAULT_SIGNAL_SECRET}" \
+      -H "Content-Type: application/json" \
+      -H "X-Request-Id: ${PV_REQ_ID}" \
+      -X POST "$BASE/api/v1/projects/$PLANVAULT_PROJECT_ID/callbacks/$signal_token_id" \
+      -d '{"source":"bash-e2e-demo"}' -o /dev/null
+    echo "(signal delivered; waiting for done or error)"
+    while (( SECONDS < deadline )); do
+      hist="$(curl -fsS "${hdr_auth[@]}" "$RT/$sid/history")"
+      if echo "$hist" | jq -e '.events[]? | select(.eventType=="done" or .eventType=="error")' >/dev/null 2>&1; then
+        break
+      fi
+      sleep 2
+    done
+  else
+    echo "(awaiting_signal detected; set PLANVAULT_SIGNAL_SECRET to auto-deliver the callback)"
+    echo "  tokenId=${signal_token_id:-unknown}"
+    echo "  curl -X POST \$BASE/api/v1/projects/\$PLANVAULT_PROJECT_ID/callbacks/\$TOKEN_ID \\"
+    echo "    -H 'Authorization: Bearer \$TOKEN_ID:\$SECRET' \\"
+    echo "    -H 'Content-Type: application/json' \\"
+    echo "    -d '{\"result\":\"ok\"}'"
+  fi
 fi
 
 echo "== PATCH $RT/$sid (close)"

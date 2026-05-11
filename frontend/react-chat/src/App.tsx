@@ -95,6 +95,18 @@ export default function App() {
   } | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
 
+  const [pendingSignal, setPendingSignal] = useState<{
+    tokenId: string
+    nodeId: string
+    expiresAt: string
+    onTimeout: string
+  } | null>(null)
+  const [signalSecret, setSignalSecret] = useState('')
+  const [signalPayloadText, setSignalPayloadText] = useState('{}')
+  const [signalBusy, setSignalBusy] = useState(false)
+  const [signalError, setSignalError] = useState<string | null>(null)
+  const [signalStatus, setSignalStatus] = useState<string | null>(null)
+
   const [pendingSlots, setPendingSlots] = useState<UiSlotField[] | null>(null)
   const [slotValues, setSlotValues] = useState<Record<string, string>>({})
   const [slotsPlanSummary, setSlotsPlanSummary] = useState<string | null>(null)
@@ -161,6 +173,11 @@ export default function App() {
     setSlotsPlanSummary(null)
     setSlotsError(null)
     setSendAck(null)
+    setPendingSignal(null)
+    setSignalSecret('')
+    setSignalPayloadText('{}')
+    setSignalError(null)
+    setSignalStatus(null)
   }
 
   const sendMessage = async () => {
@@ -233,6 +250,50 @@ export default function App() {
       setSlotsPlanSummary(null)
     } finally {
       setSlotsBusy(false)
+    }
+  }
+
+  const deliverSignal = async () => {
+    if (!pendingSignal || !sessionId) return
+    setSignalBusy(true)
+    setSignalError(null)
+    let payloadObj: Record<string, unknown>
+    try {
+      payloadObj = JSON.parse(signalPayloadText) as Record<string, unknown>
+      if (payloadObj === null || typeof payloadObj !== 'object' || Array.isArray(payloadObj))
+        throw new Error('Signal payload must be a JSON object')
+    } catch (e) {
+      setSignalError(e instanceof Error ? e.message : 'Invalid JSON')
+      setSignalBusy(false)
+      return
+    }
+    const root = apiBase.replace(/\/$/, '')
+    const pid = projectId.trim()
+    try {
+      const res = await fetch(
+        `${root}/api/v1/projects/${encodeURIComponent(pid)}/callbacks/${encodeURIComponent(pendingSignal.tokenId)}`,
+        {
+          method: 'POST',
+          headers: headersForApiCall({
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${pendingSignal.tokenId}:${signalSecret.trim()}`,
+          }),
+          body: JSON.stringify(payloadObj),
+        },
+      )
+      const json = (await res.json()) as { code?: string }
+      if (!res.ok) {
+        setSignalError(json.code ?? `HTTP ${res.status}`)
+      } else if (json.code === 'SIGNAL_ALREADY_DELIVERED') {
+        setSignalStatus('Already delivered (idempotent).')
+      } else {
+        setSignalStatus('Signal delivered — session will resume.')
+        setPendingSignal(null)
+      }
+    } catch (e) {
+      setSignalError(e instanceof Error ? e.message : 'Request failed')
+    } finally {
+      setSignalBusy(false)
     }
   }
 
@@ -341,7 +402,30 @@ export default function App() {
                 return next
               })
             }
-            if (eventName === 'confirm_plan_required') {
+                            if (eventName === 'awaiting_signal') {
+                              const tokenId = payload.tokenId
+                              if (typeof tokenId === 'string' && tokenId) {
+                                setPendingSignal({
+                                  tokenId,
+                                  nodeId: typeof payload.nodeId === 'string' ? payload.nodeId : '',
+                                  expiresAt: typeof payload.expiresAt === 'string' ? payload.expiresAt : '',
+                                  onTimeout: typeof payload.onTimeout === 'string' ? payload.onTimeout : '',
+                                })
+                                setSignalError(null)
+                                setSignalStatus(null)
+                              }
+                            }
+                            if (eventName === 'signal_received') {
+                              setPendingSignal(null)
+                              setSignalStatus('Signal delivered — session resumed.')
+                            }
+                            if (eventName === 'signal_timed_out') {
+                              setPendingSignal(null)
+                              setSignalStatus(
+                                `Signal timed out (policy: ${typeof payload.policy === 'string' ? payload.policy : 'unknown'}).`,
+                              )
+                            }
+                            if (eventName === 'confirm_plan_required') {
               const tl = payload.tools
               const td = payload.toolDescriptions
               const toolsList = Array.isArray(tl) ? tl.filter((x): x is string => typeof x === 'string') : []
@@ -526,6 +610,70 @@ export default function App() {
           <button type="button" disabled={slotsBusy} onClick={() => void submitSlots()}>
             fill_slots
           </button>
+        </div>
+      ) : null}
+
+      {(pendingSignal ?? signalStatus) ? (
+        <div className="card">
+          <h2>External signal (awaiting_signal)</h2>
+          {signalStatus ? <p style={{ marginTop: 0, color: '#16a34a' }}>{signalStatus}</p> : null}
+          {pendingSignal ? (
+            <>
+              <p style={{ color: '#64748b', marginTop: 0 }}>
+                Session is paused waiting for a signal on node{' '}
+                <code className="mono">{pendingSignal.nodeId || '—'}</code>. Token:{' '}
+                <code className="mono">{pendingSignal.tokenId}</code>
+                {pendingSignal.expiresAt ? (
+                  <>
+                    {' '}— expires <code className="mono">{pendingSignal.expiresAt}</code>
+                  </>
+                ) : null}
+                {pendingSignal.onTimeout ? (
+                  <>
+                    {' '}(on timeout: <code className="mono">{pendingSignal.onTimeout}</code>)
+                  </>
+                ) : null}
+              </p>
+              <p style={{ color: '#64748b', fontSize: '0.85rem', marginTop: 0 }}>
+                Deliver via{' '}
+                <code className="mono">POST …/callbacks/{pendingSignal.tokenId}</code> with{' '}
+                <code className="mono">{'Authorization: Bearer {tokenId}:{secret}'}</code>. The{' '}
+                <code className="mono">secret</code> is provided in the session tool-call context by
+                the <code className="mono">wait_for_signal</code> native tool.
+              </p>
+              {signalError ? <p className="error">{signalError}</p> : null}
+              <div className="field">
+                <label htmlFor="signal-secret">
+                  Signal secret (from <code className="mono">wait_for_signal</code> tool output)
+                </label>
+                <input
+                  id="signal-secret"
+                  name="signal-secret"
+                  type="password"
+                  autoComplete="off"
+                  value={signalSecret}
+                  onChange={(e) => setSignalSecret(e.target.value)}
+                  placeholder="raw secret from session tool context"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="signal-payload">Payload (JSON object)</label>
+                <textarea
+                  id="signal-payload"
+                  name="signal-payload"
+                  value={signalPayloadText}
+                  onChange={(e) => setSignalPayloadText(e.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                disabled={signalBusy || !signalSecret.trim()}
+                onClick={() => void deliverSignal()}
+              >
+                POST …/callbacks/{pendingSignal.tokenId}
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
 
